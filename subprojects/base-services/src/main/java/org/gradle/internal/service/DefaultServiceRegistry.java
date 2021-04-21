@@ -234,12 +234,19 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
     }
 
     /**
-     * Adds a service to this registry. The given object is closed when this registry is closed.
+     * Adds a service instance to this registry with the given public type. The given object is closed when this registry is closed.
      */
-    public <T> DefaultServiceRegistry add(Class<T> serviceType, final T serviceInstance) {
+    public <T> DefaultServiceRegistry add(Class<? extends T> serviceType, T serviceInstance) {
         assertMutable();
-        ownServices.add(new FixedInstanceService<T>(this, serviceType, serviceInstance));
+        ownServices.add(new FixedInstanceService(this, serviceType, serviceInstance));
         return this;
+    }
+
+    /**
+     * Adds a service instance to this registry. The given object is closed when this registry is closed.
+     */
+    public DefaultServiceRegistry add(Object serviceInstance) {
+        return add(serviceInstance.getClass(), serviceInstance);
     }
 
     /**
@@ -376,6 +383,8 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
     private class OwnServices implements ServiceProvider {
         private final Map<Class<?>, List<ServiceProvider>> providersByType = new HashMap<Class<?>, List<ServiceProvider>>(16, 0.5f);
         private final CompositeStoppable stoppable = CompositeStoppable.stoppable();
+        private final List<SingletonService> services = new ArrayList<SingletonService>();
+        private final List<AnnotatedServiceLifecycleHandler> lifecycleHandlers = new ArrayList<AnnotatedServiceLifecycleHandler>();
         private ProviderAnalyser analyser = new ProviderAnalyser();
 
         public OwnServices() {
@@ -477,13 +486,26 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
             stoppable.stop();
         }
 
-        public void add(ServiceProvider serviceProvider) {
+        public void add(SingletonService serviceProvider) {
             assertMutable();
-            if (!(serviceProvider instanceof SingletonService)) {
-                throw new UnsupportedOperationException("Unsupported service provider type: " + serviceProvider);
-            }
             stoppable.add(serviceProvider);
-            analyser.addProviderForClassHierarchy(((SingletonService) serviceProvider).serviceClass, serviceProvider);
+            analyser.collectProvidersForClassHierarchy(serviceProvider.serviceClass, serviceProvider);
+            services.add(serviceProvider);
+            Service annotationHandlerService = serviceProvider.getService(AnnotatedServiceLifecycleHandler.class);
+            if (annotationHandlerService != null) {
+                AnnotatedServiceLifecycleHandler annotationHandler = (AnnotatedServiceLifecycleHandler) annotationHandlerService.get();
+                lifecycleHandlers.add(annotationHandler);
+                for (SingletonService candidate : services) {
+                    if (candidate.hasAnnotation(annotationHandler.getAnnotation())) {
+                        annotationHandler.whenRegistered(new RegistrationWrapper(candidate));
+                    }
+                }
+            }
+            for (AnnotatedServiceLifecycleHandler lifecycleHandler : lifecycleHandlers) {
+                if (serviceProvider.hasAnnotation(lifecycleHandler.getAnnotation())) {
+                    lifecycleHandler.whenRegistered(new RegistrationWrapper(serviceProvider));
+                }
+            }
         }
 
         public void noLongerMutable() {
@@ -493,7 +515,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         private class ProviderAnalyser {
             private final Set<Class<?>> seen = new HashSet<Class<?>>(4, 0.5f);
 
-            public void addProviderForClassHierarchy(Class<?> serviceType, ServiceProvider serviceProvider) {
+            public void collectProvidersForClassHierarchy(Class<?> serviceType, ServiceProvider serviceProvider) {
                 analyseType(serviceType, serviceProvider);
                 seen.clear();
             }
@@ -526,6 +548,25 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
     }
 
+    private class RegistrationWrapper implements AnnotatedServiceLifecycleHandler.Registration {
+        private final SingletonService serviceProvider;
+
+        public RegistrationWrapper(SingletonService serviceProvider) {
+            this.serviceProvider = serviceProvider;
+        }
+
+        @Override
+        public Class<?> getDeclaredType() {
+            return serviceProvider.serviceClass;
+        }
+
+        @Override
+        public Object getInstance() {
+            serviceRequested();
+            return serviceProvider.getService(serviceProvider.serviceClass).get();
+        }
+    }
+
     private static Class<?> unwrap(Type type) {
         if (type instanceof Class) {
             return (Class) type;
@@ -541,27 +582,32 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
     }
 
-    private static abstract class ManagedObjectServiceProvider<T> implements ServiceProvider {
+    private static abstract class ManagedObjectServiceProvider implements ServiceProvider, Service {
         protected final DefaultServiceRegistry owner;
         private final Queue<ServiceProvider> dependents = new ConcurrentLinkedQueue<ServiceProvider>();
-        private volatile T instance;
+        private volatile Object instance;
 
         protected ManagedObjectServiceProvider(DefaultServiceRegistry owner) {
             this.owner = owner;
         }
 
-        protected final void setInstance(T instance) {
+        abstract Class<?> getServiceType();
+
+        protected void setInstance(Object instance) {
             this.instance = instance;
+            if (instance instanceof AnnotatedServiceLifecycleHandler && !AnnotatedServiceLifecycleHandler.class.isAssignableFrom(getServiceType())) {
+                throw new IllegalStateException(String.format("%s implements %s but is not declared as a service of this type. This service is declared as having type %s.", getDisplayName(), AnnotatedServiceLifecycleHandler.class.getSimpleName(), getServiceType().getName()));
+            }
         }
 
-        public final T getInstance() {
-            T result = instance;
+        public final Object getInstance() {
+            Object result = instance;
             if (result == null) {
                 synchronized (this) {
                     result = instance;
                     if (result == null) {
-                        result = instance = create();
-                        assert instance != null : String.format("create() of %s returned null", toString());
+                        setInstance(createServiceInstance());
+                        result = instance;
                     }
                 }
             }
@@ -571,7 +617,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         /**
          * Subclasses implement this method to create the service instance. It is never called concurrently and may not return null.
          */
-        protected abstract T create();
+        protected abstract Object createServiceInstance();
 
         public final void requiredBy(ServiceProvider serviceProvider) {
             if (fromSameRegistry(serviceProvider)) {
@@ -596,7 +642,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
     }
 
-    private static abstract class SingletonService extends ManagedObjectServiceProvider<Object> implements Service {
+    private static abstract class SingletonService extends ManagedObjectServiceProvider {
         private enum BindState {UNBOUND, BINDING, BOUND}
 
         final Type serviceType;
@@ -609,6 +655,23 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
             super(owner);
             this.serviceType = serviceType;
             serviceClass = unwrap(serviceType);
+        }
+
+        @Override
+        Class<?> getServiceType() {
+            return serviceClass;
+        }
+
+        boolean hasAnnotation(Class<? extends Annotation> annotation) {
+            if (serviceClass.getAnnotation(annotation) != null) {
+                return true;
+            }
+            for (Class<?> serviceInterface : serviceClass.getInterfaces()) {
+                if (serviceInterface.getAnnotation(annotation) != null) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         @Override
@@ -644,7 +707,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
 
         /**
-         * Do any preparation work and validation to ensure that {@link #create()} ()} can be called later.
+         * Do any preparation work and validation to ensure that {@link #createServiceInstance()} ()} can be called later.
          * This method is never called concurrently.
          */
         protected void bind() {
@@ -768,7 +831,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
 
         @Override
-        protected Object create() {
+        protected Object createServiceInstance() {
             Object[] params = assembleParameters();
             Object result = invokeMethod(params);
             // Can discard the state required to create instance
@@ -866,8 +929,8 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
     }
 
-    private static class FixedInstanceService<T> extends SingletonService {
-        public FixedInstanceService(DefaultServiceRegistry owner, Class<T> serviceType, T serviceInstance) {
+    private static class FixedInstanceService extends SingletonService {
+        public FixedInstanceService(DefaultServiceRegistry owner, Class<?> serviceType, Object serviceInstance) {
             super(owner, serviceType);
             setInstance(serviceInstance);
         }
@@ -878,7 +941,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         }
 
         @Override
-        protected Object create() {
+        protected Object createServiceInstance() {
             throw new UnsupportedOperationException();
         }
     }
