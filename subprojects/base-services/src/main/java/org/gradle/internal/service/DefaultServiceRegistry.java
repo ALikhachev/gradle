@@ -109,7 +109,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         } else {
             this.parentServices = setupParentServices(parents);
             this.allServices = new CompositeServiceProvider(ownServices, parentServices);
-            this.inspector = ((DefaultServiceRegistry) parents[0]).inspector;
+            this.inspector = parents[0] instanceof DefaultServiceRegistry ? ((DefaultServiceRegistry) parents[0]).inspector : new ClassInspector();
         }
         this.thisAsServiceProvider = allServices;
 
