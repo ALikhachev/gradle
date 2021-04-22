@@ -14,16 +14,32 @@
  * limitations under the License.
  */
 
-package org.gradle.internal.build;
+package org.gradle.internal.buildtree;
 
-import org.gradle.internal.service.scopes.BuildScopeServices;
 import org.gradle.internal.service.scopes.Scopes;
 import org.gradle.internal.service.scopes.ServiceScope;
 
 @ServiceScope(Scopes.BuildTree.class)
-public interface BuildModelControllerServices {
-    /**
-     * Registers the services required to produce a {@link BuildModelController} for the given build.
-     */
-    void supplyBuildScopeServices(BuildScopeServices services);
+public class BuildModelParameters {
+    private final boolean configureOnDemand;
+    private final boolean configurationCache;
+    private final boolean isolatedProjects;
+
+    public BuildModelParameters(boolean configureOnDemand, boolean configurationCache, boolean isolatedProjects) {
+        this.configureOnDemand = configureOnDemand;
+        this.configurationCache = configurationCache;
+        this.isolatedProjects = isolatedProjects;
+    }
+
+    public boolean isConfigureOnDemand() {
+        return configureOnDemand;
+    }
+
+    public boolean isConfigurationCache() {
+        return configurationCache;
+    }
+
+    public boolean isIsolatedProjects() {
+        return isolatedProjects;
+    }
 }

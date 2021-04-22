@@ -36,8 +36,8 @@ import org.gradle.initialization.GradlePropertiesController
 import org.gradle.internal.Factory
 import org.gradle.internal.classpath.Instrumented
 import org.gradle.internal.operations.BuildOperationExecutor
+import org.gradle.internal.vfs.FileSystemAccess
 import org.gradle.internal.watch.vfs.BuildLifecycleAwareVirtualFileSystem
-import org.gradle.util.internal.IncubationLogger
 import java.io.File
 import java.io.FileInputStream
 import java.io.OutputStream
@@ -53,7 +53,12 @@ class DefaultConfigurationCache internal constructor(
     private val scopeRegistryListener: ConfigurationCacheClassLoaderScopeRegistryListener,
     private val cacheIO: ConfigurationCacheIO,
     private val gradlePropertiesController: GradlePropertiesController,
-    private val configurationTimeBarrier: ConfigurationTimeBarrier
+    private val configurationTimeBarrier: ConfigurationTimeBarrier,
+    /**
+     * Force the [FileSystemAccess] service to be initialized as it initializes important static state.
+     */
+    @Suppress("unused")
+    private val fileSystemAccess: FileSystemAccess
 ) : ConfigurationCache {
 
     interface Host {
@@ -304,9 +309,6 @@ class DefaultConfigurationCache internal constructor(
 
     private
     fun logBootstrapSummary(message: String, vararg args: Any?) {
-        if (!startParameter.isQuiet) {
-            IncubationLogger.incubatingFeatureUsed("Configuration cache")
-        }
         log(message, *args)
     }
 

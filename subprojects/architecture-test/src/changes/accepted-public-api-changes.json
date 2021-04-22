@@ -509,6 +509,12 @@
             ]
         },
         {
+            "type": "org.gradle.testing.jacoco.tasks.JacocoCoverageVerification",
+            "member": "Method org.gradle.testing.jacoco.tasks.JacocoCoverageVerification.getDummyOutputFile()",
+            "acceptation": "This method is for internal use only",
+            "changes": []
+        },
+        {
             "type": "org.gradle.api.plugins.BasePluginExtension",
             "member": "Class org.gradle.api.plugins.BasePluginExtension",
             "acceptation": "The functionality was already available for several releases in BasePluginConvention",
