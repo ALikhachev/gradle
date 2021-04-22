@@ -66,7 +66,6 @@ import org.gradle.api.internal.project.taskfactory.TaskClassInfoStore;
 import org.gradle.api.internal.project.taskfactory.TaskFactory;
 import org.gradle.api.internal.properties.GradleProperties;
 import org.gradle.api.internal.provider.ConfigurationTimeBarrier;
-import org.gradle.api.internal.provider.DefaultConfigurationTimeBarrier;
 import org.gradle.api.internal.provider.DefaultProviderFactory;
 import org.gradle.api.internal.provider.DefaultValueSourceProviderFactory;
 import org.gradle.api.internal.provider.ValueSourceProviderFactory;
@@ -154,6 +153,7 @@ import org.gradle.internal.build.BuildStateRegistry;
 import org.gradle.internal.build.DefaultPublicBuildPath;
 import org.gradle.internal.build.PublicBuildPath;
 import org.gradle.internal.buildevents.BuildStartedTime;
+import org.gradle.internal.buildtree.BuildModelParameters;
 import org.gradle.internal.classloader.ClassLoaderFactory;
 import org.gradle.internal.classpath.CachedClasspathTransformer;
 import org.gradle.internal.composite.DefaultBuildIncluder;
@@ -323,10 +323,6 @@ public class BuildScopeServices extends DefaultServiceRegistry {
             gradleProperties,
             services
         );
-    }
-
-    protected ConfigurationTimeBarrier createConfigurationTimeBarrier(ListenerManager listenerManager) {
-        return new DefaultConfigurationTimeBarrier(listenerManager);
     }
 
     protected ProviderFactory createProviderFactory(
@@ -511,18 +507,19 @@ public class BuildScopeServices extends DefaultServiceRegistry {
         return new TaskPathProjectEvaluator(cancellationToken);
     }
 
-    protected ProjectsPreparer createBuildConfigurer(ProjectConfigurer projectConfigurer, BuildSourceBuilder buildSourceBuilder, BuildStateRegistry buildStateRegistry, BuildLoader buildLoader, ListenerManager listenerManager, BuildOperationExecutor buildOperationExecutor) {
+    protected ProjectsPreparer createBuildConfigurer(ProjectConfigurer projectConfigurer, BuildSourceBuilder buildSourceBuilder, BuildStateRegistry buildStateRegistry, BuildLoader buildLoader, ListenerManager listenerManager, BuildOperationExecutor buildOperationExecutor, BuildModelParameters buildModelParameters) {
         ModelConfigurationListener modelConfigurationListener = listenerManager.getBroadcaster(ModelConfigurationListener.class);
         return new BuildOperationFiringProjectsPreparer(
-                        new BuildTreePreparingProjectsPreparer(
-                                new DefaultProjectsPreparer(
-                                        projectConfigurer,
-                                        modelConfigurationListener,
-                                        buildOperationExecutor),
-                                buildLoader,
-                                buildStateRegistry,
-                                buildSourceBuilder),
-                        buildOperationExecutor);
+            new BuildTreePreparingProjectsPreparer(
+                new DefaultProjectsPreparer(
+                    projectConfigurer,
+                    buildModelParameters,
+                    modelConfigurationListener,
+                    buildOperationExecutor),
+                buildLoader,
+                buildStateRegistry,
+                buildSourceBuilder),
+            buildOperationExecutor);
     }
 
     protected ProjectAccessHandler createProjectAccessHandler() {
@@ -569,8 +566,8 @@ public class BuildScopeServices extends DefaultServiceRegistry {
     }
 
     protected DefaultToolingModelBuilderRegistry createBuildScopedToolingModelBuilders(List<BuildScopeToolingModelBuilderRegistryAction> registryActions,
-                                                                                final BuildOperationExecutor buildOperationExecutor,
-                                                                                ProjectStateRegistry projectStateRegistry) {
+                                                                                       final BuildOperationExecutor buildOperationExecutor,
+                                                                                       ProjectStateRegistry projectStateRegistry) {
         DefaultToolingModelBuilderRegistry registry = new DefaultToolingModelBuilderRegistry(buildOperationExecutor, projectStateRegistry);
         for (BuildScopeToolingModelBuilderRegistryAction registryAction : registryActions) {
             registryAction.execute(registry);
