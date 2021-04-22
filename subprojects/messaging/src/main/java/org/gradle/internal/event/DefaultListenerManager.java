@@ -303,7 +303,7 @@ public class DefaultListenerManager implements ListenerManager, AnnotatedService
             takeOwnership();
 
             if (!notified) {
-                for (int i = 0; i < pendingRegistrations.size(); ) {
+                for (int i = 0; i < pendingRegistrations.size();) {
                     Registration registration = pendingRegistrations.get(i);
                     if (type.isAssignableFrom(registration.getDeclaredType())) {
                         addListener(registration.getInstance());

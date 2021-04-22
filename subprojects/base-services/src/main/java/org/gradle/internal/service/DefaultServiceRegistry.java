@@ -40,7 +40,9 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -76,6 +78,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
     private final static Service[] NO_DEPENDENTS = new Service[0];
     private final static Object[] NO_PARAMS = new Object[0];
 
+    private final ClassInspector inspector;
     private final OwnServices ownServices;
     private final ServiceProvider allServices;
     private final ServiceProvider parentServices;
@@ -102,9 +105,11 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         if (parents.length == 0) {
             this.parentServices = null;
             this.allServices = ownServices;
+            this.inspector = new ClassInspector();
         } else {
-            parentServices = setupParentServices(parents);
-            allServices = new CompositeServiceProvider(ownServices, parentServices);
+            this.parentServices = setupParentServices(parents);
+            this.allServices = new CompositeServiceProvider(ownServices, parentServices);
+            this.inspector = ((DefaultServiceRegistry) parents[0]).inspector;
         }
         this.thisAsServiceProvider = allServices;
 
@@ -496,14 +501,14 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
                 AnnotatedServiceLifecycleHandler annotationHandler = (AnnotatedServiceLifecycleHandler) annotationHandlerService.get();
                 lifecycleHandlers.add(annotationHandler);
                 for (SingletonService candidate : services) {
-                    if (candidate.hasAnnotation(annotationHandler.getAnnotation())) {
+                    if (inspector.hasAnnotation(candidate.serviceClass, annotationHandler.getAnnotation())) {
                         annotationHandler.whenRegistered(new RegistrationWrapper(candidate));
                     }
                 }
             }
-            for (AnnotatedServiceLifecycleHandler lifecycleHandler : lifecycleHandlers) {
-                if (serviceProvider.hasAnnotation(lifecycleHandler.getAnnotation())) {
-                    lifecycleHandler.whenRegistered(new RegistrationWrapper(serviceProvider));
+            for (AnnotatedServiceLifecycleHandler annotationHandler : lifecycleHandlers) {
+                if (inspector.hasAnnotation(serviceProvider.serviceClass, annotationHandler.getAnnotation())) {
+                    annotationHandler.whenRegistered(new RegistrationWrapper(serviceProvider));
                 }
             }
         }
@@ -596,7 +601,14 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         protected void setInstance(Object instance) {
             this.instance = instance;
             if (instance instanceof AnnotatedServiceLifecycleHandler && !AnnotatedServiceLifecycleHandler.class.isAssignableFrom(getServiceType())) {
-                throw new IllegalStateException(String.format("%s implements %s but is not declared as a service of this type. This service is declared as having type %s.", getDisplayName(), AnnotatedServiceLifecycleHandler.class.getSimpleName(), getServiceType().getName()));
+                throw new IllegalStateException(String.format("%s implements %s but is not declared as a service of this type. This service is declared as having type %s.", getDisplayName(), AnnotatedServiceLifecycleHandler.class.getSimpleName(), format(getServiceType())));
+            }
+            for (AnnotatedServiceLifecycleHandler lifecycleHandler : owner.ownServices.lifecycleHandlers) {
+                boolean implementationHasAnnotation = owner.inspector.hasAnnotation(instance.getClass(), lifecycleHandler.getAnnotation());
+                boolean declaredWithAnnotation = owner.inspector.hasAnnotation(getServiceType(), lifecycleHandler.getAnnotation());
+                if (implementationHasAnnotation && !declaredWithAnnotation) {
+                    throw new IllegalStateException(String.format("%s is annotated with @%s but is not declared as a service with this annotation. This service is declared as having type %s.", getDisplayName(), format(lifecycleHandler.getAnnotation()), format(getServiceType())));
+                }
             }
         }
 
@@ -660,18 +672,6 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
         @Override
         Class<?> getServiceType() {
             return serviceClass;
-        }
-
-        boolean hasAnnotation(Class<? extends Annotation> annotation) {
-            if (serviceClass.getAnnotation(annotation) != null) {
-                return true;
-            }
-            for (Class<?> serviceInterface : serviceClass.getInterfaces()) {
-                if (serviceInterface.getAnnotation(annotation) != null) {
-                    return true;
-                }
-            }
-            return false;
         }
 
         @Override
@@ -884,7 +884,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
 
         @Override
         public String getDisplayName() {
-            return "Service " + format(method.getServiceType()) + " at " + method.getOwner().getSimpleName() + "." + method.getName() + "()";
+            return "Service " + format(method.getServiceType()) + " at " + format(method.getOwner()) + "." + method.getName() + "()";
         }
 
         @Override
@@ -937,7 +937,7 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
 
         @Override
         public String getDisplayName() {
-            return "Service " + format(serviceType) + " with implementation " + getInstance();
+            return "Service " + format(serviceType) + " with implementation " + format(getInstance().getClass());
         }
 
         @Override
@@ -1269,6 +1269,47 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
 
         @Override
         public void requiredBy(ServiceProvider serviceProvider) {
+        }
+    }
+
+    private static class ClassInspector {
+        private final ConcurrentMap<Class<?>, ClassDetails> classes = new ConcurrentHashMap<Class<?>, ClassDetails>();
+
+        boolean hasAnnotation(Class<?> type, Class<? extends Annotation> annotationType) {
+            ClassDetails classDetails = classes.get(type);
+            if (classDetails == null) {
+                classes.putIfAbsent(type, new ClassDetails());
+                classDetails = classes.get(type);
+            }
+            return classDetails.hasAnnotation(type, annotationType);
+        }
+
+        private static class ClassDetails {
+            private final ConcurrentMap<Class<? extends Annotation>, Boolean> annotations = new ConcurrentHashMap<Class<? extends Annotation>, Boolean>();
+
+            public boolean hasAnnotation(Class<?> type, Class<? extends Annotation> annotationType) {
+                Boolean present = annotations.get(annotationType);
+                if (present == null) {
+                    present = locateAnnotation(type, annotationType);
+                    annotations.putIfAbsent(annotationType, present);
+                }
+                return present;
+            }
+
+            private boolean locateAnnotation(Class<?> type, Class<? extends Annotation> annotation) {
+                if (type.getAnnotation(annotation) != null) {
+                    return true;
+                }
+                for (Class<?> serviceInterface : type.getInterfaces()) {
+                    if (serviceInterface.getAnnotation(annotation) != null) {
+                        return true;
+                    }
+                }
+                if (type.getSuperclass() != null) {
+                    return locateAnnotation(type.getSuperclass(), annotation);
+                }
+                return false;
+            }
         }
     }
 }

@@ -22,7 +22,7 @@ import org.gradle.internal.service.scopes.Scopes
 import org.gradle.internal.service.scopes.StatefulListener
 import spock.lang.Specification
 
-class DefaultListenerManagerServiceRegistryTest extends Specification {
+class DefaultListenerManagerInServiceRegistryTest extends Specification {
     def listenerManager = new DefaultListenerManager(Scopes.BuildTree)
     def services = new DefaultServiceRegistry()
 
@@ -56,23 +56,63 @@ class DefaultListenerManagerServiceRegistryTest extends Specification {
     }
 
     def "automatically registers stateful listeners when first event is broadcast from child"() {
-        expect: false
-    }
+        def created = Mock(Runnable)
+        def listener = Mock(TestListener)
 
-    def "does not create listeners if no event is broadcast"() {
-        expect: false
+        when:
+        services.addProvider(new Object() {
+            TestListener createListener() {
+                created.run()
+                return listener
+            }
+        })
+        def broadcast = listenerManager.createChild(Scopes.BuildTree).getBroadcaster(TestListener)
+
+        then:
+        0 * _
+
+        when:
+        broadcast.something("12")
+
+        then:
+        1 * created.run()
+        1 * listener.something("12")
+        0 * _
     }
 
     def "registers listeners that have already been created prior to first event"() {
-        expect: false
+        def listener = Mock(TestListener)
+
+        when:
+        services.addProvider(new Object() {
+            TestListener createListener() {
+                return listener
+            }
+        })
+        def broadcast = listenerManager.getBroadcaster(TestListener)
+        services.get(TestListener)
+
+        then:
+        0 * _
+
+        when:
+        broadcast.something("12")
+
+        then:
+        1 * listener.something("12")
+        0 * _
     }
 
     def "registers listeners that are registered before listener manager"() {
         given:
+        def created = Mock(Runnable)
         def listener = Mock(TestListener)
         def services = new DefaultServiceRegistry()
+
+        when:
         services.addProvider(new Object() {
             TestListener createTestListener() {
+                created.run()
                 return listener
             }
         })
@@ -83,12 +123,16 @@ class DefaultListenerManagerServiceRegistryTest extends Specification {
         })
         def broadcast = services.get(ListenerManager).getBroadcaster(TestListener)
 
+        then:
+        0 * _
+
         when:
         broadcast.something("12")
 
         then:
+        1 * created.run()
         1 * listener.something("12")
-        0 * listener._
+        0 * _
     }
 
     def "fails when listener manager is not declared as annotation handler"() {
@@ -100,7 +144,7 @@ class DefaultListenerManagerServiceRegistryTest extends Specification {
 
         then:
         def e = thrown(IllegalStateException)
-        e.message == 'Service implements AnnotatedServiceLifecycleHandler but is not declared as a service of this type. This service is declared as having type org.gradle.internal.event.ListenerManager.'
+        e.message == 'Service ListenerManager with implementation DefaultListenerManager implements AnnotatedServiceLifecycleHandler but is not declared as a service of this type. This service is declared as having type ListenerManager.'
     }
 
     def "fails when listener manager factory is not declared as annotation handler"() {
@@ -117,20 +161,31 @@ class DefaultListenerManagerServiceRegistryTest extends Specification {
 
         then:
         def e = thrown(IllegalStateException)
-        e.message == 'Service implements AnnotatedServiceLifecycleHandler but is not declared as a service of this type. This service is declared as having type org.gradle.internal.event.ListenerManager.'
+        e.message == 'Service ListenerManager at DefaultListenerManagerInServiceRegistryTest$.createListenerManager() implements AnnotatedServiceLifecycleHandler but is not declared as a service of this type. This service is declared as having type ListenerManager.'
     }
 
     def "fails when listener instance is not declared as listener type"() {
-        expect: false
-    }
+        def listener = Mock(SubListener)
+        services.addProvider(new Object() {
+            Runnable createListener() {
+                return listener
+            }
+        })
 
-    def "fails when listener cannot be created"() {
-        expect: false
+        when:
+        services.get(Runnable)
+
+        then:
+        def e = thrown(IllegalStateException)
+        e.message == 'Service Runnable at DefaultListenerManagerInServiceRegistryTest$.createListener() is annotated with @StatefulListener but is not declared as a service with this annotation. This service is declared as having type Runnable.'
     }
 
     @EventScope(Scopes.BuildTree)
     @StatefulListener
     interface TestListener {
         void something(String param)
+    }
+
+    abstract static class SubListener implements TestListener, Runnable {
     }
 }
