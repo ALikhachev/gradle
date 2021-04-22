@@ -103,6 +103,31 @@ class DefaultListenerManagerInServiceRegistryTest extends Specification {
         0 * _
     }
 
+    def "does not eagerly create listener manager"() {
+        def created = Mock(Runnable)
+        def listener = Mock(TestListener)
+        def services = new DefaultServiceRegistry()
+
+        when:
+        services.addProvider(new Object() {
+            DefaultListenerManager createListenerManager() {
+                created.run()
+                return listenerManager
+            }
+        })
+        services.add(listener)
+
+        then:
+        0 * _
+
+        when:
+        services.get(ListenerManager)
+
+        then:
+        1 * created.run()
+        0 * _
+    }
+
     def "registers listeners that are registered before listener manager"() {
         given:
         def created = Mock(Runnable)

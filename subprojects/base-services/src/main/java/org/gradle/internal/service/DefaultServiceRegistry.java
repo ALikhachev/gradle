@@ -496,19 +496,18 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
             stoppable.add(serviceProvider);
             analyser.collectProvidersForClassHierarchy(serviceProvider.serviceClass, serviceProvider);
             services.add(serviceProvider);
-            Service annotationHandlerService = serviceProvider.getService(AnnotatedServiceLifecycleHandler.class);
-            if (annotationHandlerService != null) {
-                AnnotatedServiceLifecycleHandler annotationHandler = (AnnotatedServiceLifecycleHandler) annotationHandlerService.get();
-                lifecycleHandlers.add(annotationHandler);
-                for (SingletonService candidate : services) {
-                    if (inspector.hasAnnotation(candidate.serviceClass, annotationHandler.getAnnotation())) {
-                        annotationHandler.whenRegistered(new RegistrationWrapper(candidate));
-                    }
-                }
-            }
             for (AnnotatedServiceLifecycleHandler annotationHandler : lifecycleHandlers) {
                 if (inspector.hasAnnotation(serviceProvider.serviceClass, annotationHandler.getAnnotation())) {
                     annotationHandler.whenRegistered(new RegistrationWrapper(serviceProvider));
+                }
+            }
+        }
+
+        void annotationHandlerCreated(AnnotatedServiceLifecycleHandler annotationHandler) {
+            lifecycleHandlers.add(annotationHandler);
+            for (SingletonService candidate : services) {
+                if (inspector.hasAnnotation(candidate.serviceClass, annotationHandler.getAnnotation())) {
+                    annotationHandler.whenRegistered(new RegistrationWrapper(candidate));
                 }
             }
         }
@@ -602,6 +601,9 @@ public class DefaultServiceRegistry implements ServiceRegistry, Closeable, Conta
             this.instance = instance;
             if (instance instanceof AnnotatedServiceLifecycleHandler && !AnnotatedServiceLifecycleHandler.class.isAssignableFrom(getServiceType())) {
                 throw new IllegalStateException(String.format("%s implements %s but is not declared as a service of this type. This service is declared as having type %s.", getDisplayName(), AnnotatedServiceLifecycleHandler.class.getSimpleName(), format(getServiceType())));
+            }
+            if (instance instanceof AnnotatedServiceLifecycleHandler) {
+                owner.ownServices.annotationHandlerCreated((AnnotatedServiceLifecycleHandler) instance);
             }
             for (AnnotatedServiceLifecycleHandler lifecycleHandler : owner.ownServices.lifecycleHandlers) {
                 boolean implementationHasAnnotation = owner.inspector.hasAnnotation(instance.getClass(), lifecycleHandler.getAnnotation());
